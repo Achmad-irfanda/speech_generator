@@ -108,8 +108,8 @@ class AssetsProgressCard extends StatelessWidget {
               if (!failed) ...[
                 const SizedBox(height: 6),
                 Text(
-                  'Kamu tetap bisa mengisi teks sambil menunggu. '
-                  'Tombol putar aktif setelah model siap.',
+                  'Tunggu sebentar, sistem sedang menyiapkan model AI terbaik buat Kamu '
+                  'Form dan Tombol putar aktif setelah model siap.',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant.withValues(
                       alpha: 0.75,
