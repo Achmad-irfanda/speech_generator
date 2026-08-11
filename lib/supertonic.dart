@@ -327,7 +327,8 @@ class _TTSPageState extends State<TTSPage> {
   // ---------------------------------------------------------------------------
 
   String _buildClipboardPayload() {
-    final styleLabel = voicePresets[_selectedChar]?.label ?? _selectedChar.name;
+    final styleLabel =
+        voicePresets[_selectedChar]?.styleFile ?? _selectedChar.name;
 
     // Nominal di-mask hanya di payload. Teks yang dikirim ke model TTS
     // tetap memakai angka aslinya.
@@ -344,7 +345,9 @@ class _TTSPageState extends State<TTSPage> {
         '\n'
         'speed: ${_speed.toStringAsFixed(2)}\n'
         '\n'
-        'voice styles: $styleLabel';
+        'voice styles: $styleLabel'
+        '\n'
+        'pitch $_pitch';
   }
 
   Future<void> _copyToClipboard() async {
