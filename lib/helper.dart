@@ -353,11 +353,7 @@ class UnicodeProcessor {
   UnicodeProcessor._(this.indexer);
 
   static Future<UnicodeProcessor> load(String path) async {
-    final json = jsonDecode(
-      path.startsWith('assets/')
-          ? await rootBundle.loadString(path)
-          : File(path).readAsStringSync(),
-    );
+    final json = jsonDecode(await _readAssetText(path));
 
     final indexer = json is List
         ? {
@@ -734,11 +730,7 @@ Future<TextToSpeech> loadTextToSpeech(
 Future<Style> loadVoiceStyle(List<String> paths) async {
   final bsz = paths.length;
 
-  final firstJson = jsonDecode(
-    paths[0].startsWith('assets/')
-        ? await rootBundle.loadString(paths[0])
-        : File(paths[0]).readAsStringSync(),
-  );
+  final firstJson = jsonDecode(await _readAssetText(paths[0]));
 
   final ttlDims = List<int>.from(firstJson['style_ttl']['dims']);
   final dpDims = List<int>.from(firstJson['style_dp']['dims']);
@@ -747,11 +739,7 @@ Future<Style> loadVoiceStyle(List<String> paths) async {
   final dpFlat = Float32List(bsz * dpDims[1] * dpDims[2]);
 
   for (var i = 0; i < bsz; i++) {
-    final json = jsonDecode(
-      paths[i].startsWith('assets/')
-          ? await rootBundle.loadString(paths[i])
-          : File(paths[i]).readAsStringSync(),
-    );
+    final json = jsonDecode(await _readAssetText(paths[i]));
 
     final ttlData = _flattenToDouble(json['style_ttl']['data']);
     final dpData = _flattenToDouble(json['style_dp']['data']);
@@ -781,7 +769,7 @@ Future<Style> loadVoiceStyle(List<String> paths) async {
 
 Future<Map<String, dynamic>> _loadCfgs(String onnxDir) async {
   final path = '$onnxDir/tts.json';
-  final json = jsonDecode(await rootBundle.loadString(path));
+  final json = jsonDecode(await _readAssetText(path));
   return json as Map<String, dynamic>;
 }
 
@@ -795,6 +783,35 @@ Future<String> copyModelToFile(String path) async {
   return modelPath;
 }
 
+bool _isBundlePath(String path) => path.startsWith('assets/');
+
+/// Baca teks dari bundle atau filesystem, tergantung bentuk path.
+Future<String> _readAssetText(String path) async {
+  if (_isBundlePath(path)) return rootBundle.loadString(path);
+
+  final file = File(path);
+  if (!file.existsSync()) {
+    throw FileSystemException(
+      'Asset TTS tidak ditemukan. Pastikan TtsAssetsDownloadService.ensureReady() '
+      'sudah selesai sebelum loadTextToSpeech() dipanggil.',
+      path,
+    );
+  }
+  return file.readAsString();
+}
+
+/// Kembalikan path filesystem yang siap dioper ke ONNX Runtime.
+/// Untuk bundle path, file diekstrak dulu ke cache (perilaku lama).
+/// Untuk path filesystem, dipakai apa adanya — tanpa copy percuma.
+Future<String> _materializeModel(String path) async {
+  if (_isBundlePath(path)) return copyModelToFile(path);
+
+  if (!File(path).existsSync()) {
+    throw FileSystemException('ONNX model not found', path);
+  }
+  return path;
+}
+
 Future<Map<String, OrtSession>> _loadOnnxAll(String dir) async {
   final ort = OnnxRuntime();
   final models = [
@@ -806,7 +823,7 @@ Future<Map<String, OrtSession>> _loadOnnxAll(String dir) async {
 
   final sessions = await Future.wait(
     models.map((name) async {
-      final path = await copyModelToFile('$dir/$name.onnx');
+      final path = await _materializeModel('$dir/$name.onnx');
       logger.d('Loading $name.onnx');
       return ort.createSessionFromAsset(path);
     }),

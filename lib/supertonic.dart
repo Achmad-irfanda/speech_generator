@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -5,8 +6,12 @@ import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:speech_generator/amout_masker.dart';
+import 'package:speech_generator/assets_download_progress.dart';
+import 'package:speech_generator/assets_download_service.dart';
+import 'package:speech_generator/assets_progerss_card.dart';
 import 'package:speech_generator/helper.dart';
 import 'package:speech_generator/main.dart';
+import 'package:speech_generator/tts_assets_registry.dart';
 
 /// Bahasa yang didukung halaman ini.
 /// `code` dipakai saat memanggil model ONNX, `label` untuk tampilan.
@@ -38,6 +43,12 @@ class _TTSPageState extends State<TTSPage> {
   );
   final TextEditingController _textEnController = TextEditingController();
 
+  final TtsAssetsDownloadService _assets = TtsAssetsDownloadService.instance;
+
+  StreamSubscription<AssetsDownloadProgress>? _assetsSub;
+
+  bool _assetsReady = false;
+
   TextToSpeech? _textToSpeech;
   Style? _style;
 
@@ -58,18 +69,20 @@ class _TTSPageState extends State<TTSPage> {
   VoiceCharacter _selectedChar = VoiceCharacter.normal;
   int _indexTextSelected = 0;
 
-  bool get _isBusy => _isLoading || _generatingLang != null;
+  bool get _isBusy =>
+      _isLoading || _generatingLang != null || !_assets.value.isReady;
   bool get _isReady => _textToSpeech != null && _style != null;
 
   @override
   void initState() {
     super.initState();
-    _loadModels();
+    _watchAssets();
     _setupAudioPlayerListeners();
   }
 
   @override
   void dispose() {
+    _assetsSub?.cancel();
     _textIdController.dispose();
     _textEnController.dispose();
     _audioPlayer.dispose();
@@ -79,6 +92,34 @@ class _TTSPageState extends State<TTSPage> {
   // ---------------------------------------------------------------------------
   // Model & audio
   // ---------------------------------------------------------------------------
+
+  /// Model baru boleh di-load setelah aset core lengkap.
+  /// Sisa voice style boleh menyusul — engine tidak butuh semuanya untuk boot.
+  void _watchAssets() {
+    _assetsSub = _assets.progress.listen((progress) {
+      if (!mounted) return;
+
+      final canBoot = progress.coreReady || progress.isReady;
+      if (canBoot && !_assetsReady) {
+        _assetsReady = true;
+        _loadModels();
+      }
+
+      if (!canBoot) {
+        setState(() => _status = progress.headline);
+      }
+    });
+
+    // Kalau semua aset sudah ada dari sesi sebelumnya, langsung boot.
+    _assets.isComplete(coreOnly: true).then((ready) {
+      if (ready && mounted && !_assetsReady) {
+        _assetsReady = true;
+        _loadModels();
+      }
+    });
+
+    _assets.ensureReady();
+  }
 
   void _setupAudioPlayerListeners() {
     _audioPlayer.playerStateStream.listen((state) {
@@ -114,7 +155,9 @@ class _TTSPageState extends State<TTSPage> {
     });
 
     try {
-      _textToSpeech = await loadTextToSpeech('assets/onnx', useGpu: false);
+      final onnxDir = await _assets.onnxDirPath;
+      _textToSpeech = await loadTextToSpeech(onnxDir, useGpu: false);
+
       await _applyStyle(_selectedChar);
 
       if (!mounted) return;
@@ -140,9 +183,22 @@ class _TTSPageState extends State<TTSPage> {
       return;
     }
 
+    final asset = TtsAsset.styleFor(preset.styleFile);
+    if (asset != null) {
+      final file = File(await _assets.localPathOf(asset));
+      if (!file.existsSync()) {
+        _notify(
+          'Voice style ${preset.label} masih diunduh. '
+          'Coba lagi sebentar lagi.',
+        );
+        return;
+      }
+    }
+
     try {
+      final styleDir = await _assets.voiceStyleDirPath;
       final style = await loadVoiceStyle([
-        'assets/voice_styles/${preset.styleFile}.json',
+        '$styleDir/${preset.styleFile}.json',
       ]);
 
       if (!mounted) return;
@@ -164,6 +220,15 @@ class _TTSPageState extends State<TTSPage> {
 
   Future<void> _generateSpeech(TtsLang lang) async {
     final text = _controllerFor(lang).text.trim();
+
+    final assetState = _assets.value;
+    if (!assetState.coreReady && !assetState.isReady) {
+      _notify(
+        'Proses menyiapkan model masih berlangsung (${assetState.percent}%). '
+        'Tunggu sebentar ya.',
+      );
+      return;
+    }
 
     if (!_isReady) {
       _notify('Model belum siap. Tunggu proses pemuatan selesai.');
@@ -321,6 +386,10 @@ class _TTSPageState extends State<TTSPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              AssetsProgressCard(
+                service: _assets,
+                onRetry: () => _assets.ensureReady(),
+              ),
               _StatusBanner(
                 status: _status,
                 isBusy: _isBusy,
@@ -517,10 +586,7 @@ class _TTSPageState extends State<TTSPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Yang akan disalin',
-              style: theme.textTheme.labelMedium,
-            ),
+            Text('Yang akan disalin', style: theme.textTheme.labelMedium),
             const SizedBox(height: 8),
             if (maskedId.isNotEmpty)
               Text('ID: $maskedId', style: theme.textTheme.bodySmall),
@@ -692,10 +758,7 @@ class _InfoChip extends StatelessWidget {
         color: theme.colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Text(
-        '$label: $value',
-        style: theme.textTheme.bodySmall,
-      ),
+      child: Text('$label: $value', style: theme.textTheme.bodySmall),
     );
   }
 }

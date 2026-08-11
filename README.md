@@ -35,55 +35,45 @@ Teks panjang otomatis dipecah per kalimat (maks 300 karakter; 120 untuk `ko`/`ja
 | Flutter | 3.x |
 | Dart | 3.10+ jika memakai dot-shorthand `.fromSeed(...)` di `main.dart` |
 | Platform | Android, iOS |
+| Java / JVM target | 17 (dibutuhkan desugaring `flutter_local_notifications`) |
 
-Dependency utama: `flutter_onnxruntime`, `just_audio`, `path_provider`, `logger`.
+Dependency utama: `flutter_onnxruntime`, `just_audio`, `path_provider`, `http`, `flutter_local_notifications`, `logger`.
+
+> `path_provider` sebelumnya nebeng sebagai transitive dependency `just_audio`. Sekarang dideklarasikan eksplisit di `pubspec.yaml` — jangan dihapus.
 
 ---
 
-## Setup assets
+## Assets
 
-Model ONNX dan voice style **tidak ikut di dalam repo** karena ukurannya. Kalau folder `assets/` kamu kosong, unduh dari bucket berikut.
+**Tidak perlu setup manual.** Model ONNX dan voice style di-download otomatis saat aplikasi pertama kali dibuka, lalu disimpan permanen di storage internal aplikasi. Peluncuran berikutnya langsung memakai file lokal tanpa menyentuh jaringan.
 
-Base URL:
+Aset **tidak** di-bundle ke dalam APK/IPA — kalau ikut, ukuran build naik sekitar 200 MB.
+
+Base URL bucket:
 
 ```
 https://storage.googleapis.com/storage_interactive/interactive/mobile/tts-engine
 ```
 
-Segmen setelah base URL mengikuti nama folder, jadi struktur di bucket sama persis dengan struktur lokal — tinggal copy apa adanya.
+Daftar file dan URL-nya tidak ditulis manual di mana-mana. Semuanya diturunkan dari enum `TtsAsset` di `lib/tts_assets/tts_asset_registry.dart`:
 
-### Model ONNX
-
-```
-https://storage.googleapis.com/storage_interactive/interactive/mobile/tts-engine/onnx/tts.json
-https://storage.googleapis.com/storage_interactive/interactive/mobile/tts-engine/onnx/unicode_indexer.json
-https://storage.googleapis.com/storage_interactive/interactive/mobile/tts-engine/onnx/duration_predictor.onnx
-https://storage.googleapis.com/storage_interactive/interactive/mobile/tts-engine/onnx/text_encoder.onnx
-https://storage.googleapis.com/storage_interactive/interactive/mobile/tts-engine/onnx/vector_estimator.onnx
-https://storage.googleapis.com/storage_interactive/interactive/mobile/tts-engine/onnx/vocoder.onnx
+```dart
+enum TtsAsset {
+  vocoder(TtsAssetDir.onnx, 'vocoder.onnx', core: true, estimatedBytes: 55 * 1024 * 1024),
+  styleF3(TtsAssetDir.voiceStyles, 'F3.json', estimatedBytes: 64 * 1024),
+  // ...
+}
 ```
 
-### Voice styles
+URL dibentuk `{base}/{dir.folder}/{filename}` — pola yang sama dengan `AssetsManager._buildUrl()` di `interactive_holic_v1`, dan segmen `onnx` / `voice_styles` persis nilai `DirMainPathUsage.name`. Jadi bucket yang sama melayani dua project tanpa penyesuaian path.
+
+Tambah file baru di bucket cukup dengan menambah satu entri enum. Service download, progress bar, notifikasi, dan verifikasi kelengkapan otomatis ikut.
+
+### Struktur di storage
 
 ```
-https://storage.googleapis.com/storage_interactive/interactive/mobile/tts-engine/voice_styles/M1.json
-https://storage.googleapis.com/storage_interactive/interactive/mobile/tts-engine/voice_styles/M2.json
-https://storage.googleapis.com/storage_interactive/interactive/mobile/tts-engine/voice_styles/M3.json
-https://storage.googleapis.com/storage_interactive/interactive/mobile/tts-engine/voice_styles/M4.json
-https://storage.googleapis.com/storage_interactive/interactive/mobile/tts-engine/voice_styles/M5.json
-https://storage.googleapis.com/storage_interactive/interactive/mobile/tts-engine/voice_styles/F1.json
-https://storage.googleapis.com/storage_interactive/interactive/mobile/tts-engine/voice_styles/F2.json
-https://storage.googleapis.com/storage_interactive/interactive/mobile/tts-engine/voice_styles/F3.json
-https://storage.googleapis.com/storage_interactive/interactive/mobile/tts-engine/voice_styles/F4.json
-https://storage.googleapis.com/storage_interactive/interactive/mobile/tts-engine/voice_styles/F5.json
-```
-
-> **Catatan.** Di aplikasi produksi (`interactive_holic_v1`), URL ini dibentuk oleh `AssetsManager._buildUrl()` dengan pola `{Config.onnxAssets}/{DirMainPathUsage.name}/{relativePath}`, dan daftar filenya ada di `AssetRegistry`. Segmen folder di atas — `onnx` dan `voice_styles` — persis nilai `DirMainPathUsage.name`, jadi asset yang sama bisa dipakai kedua project tanpa penyesuaian path.
-
-Struktur yang diharapkan:
-
-```
-assets/
+<applicationSupportDirectory>/tts-engine/
+├── manifest.json                # cache Content-Length per file
 ├── onnx/
 │   ├── tts.json                 # konfigurasi sample_rate, chunk size, latent dim
 │   ├── unicode_indexer.json     # peta rune → token id
@@ -96,29 +86,113 @@ assets/
     └── M1.json … M5.json        # style vector suara laki-laki
 ```
 
-### ⚠️ Catatan penting soal path
+### Kenapa `applicationSupport`, bukan external storage
 
-Loader saat ini **tidak konsisten** dan ini bukan bug yang sudah diperbaiki:
-
-| Loader | Sumber |
+| Kandidat | Masalah |
 |---|---|
-| `_loadOnnxAll` (4 file `.onnx`) | `File(path)` — filesystem |
-| `_loadCfgs` (`tts.json`) | `File(path)` — filesystem |
-| `UnicodeProcessor.load` | `rootBundle` jika path diawali `assets/` |
-| `loadVoiceStyle` | `rootBundle` jika path diawali `assets/` |
+| `/storage/emulated/0/Download` | Ruang milik user. File manager bisa menghapusnya kapan saja dan app rusak tanpa error yang jelas. Akses penuh di Android 11+ butuh `MANAGE_EXTERNAL_STORAGE`, yang ditolak Play Store untuk use case ini. |
+| `getExternalStorageDirectory()` | Android-only, iOS tidak punya padanannya. |
+| `getApplicationCacheDirectory()` | Boleh dihapus OS kapan saja, termasuk di tengah sesi. Model 200 MB jadi target purge pertama saat storage menipis. |
+| **`getApplicationSupportDirectory()`** ✅ | Sama di Android & iOS, tanpa permission, ikut terhapus saat uninstall, tidak tersentuh file manager. |
 
-Artinya pemanggilan `loadTextToSpeech('assets/onnx')` mencari file `.onnx` dan `tts.json` sebagai **path filesystem relatif terhadap working directory proses**, bukan sebagai Flutter bundle asset. Di device, itu akan gagal kecuali file-nya sudah diekstrak duluan ke storage.
+> **Catatan iOS yang belum diselesaikan.** `applicationSupport` ikut ter-backup ke iCloud. 200 MB file yang bisa di-download ulang tidak layak makan kuota user, dan bisa jadi temuan saat App Store review. Perbaikannya: set `NSURLIsExcludedFromBackupKey` lewat platform channel di `AppDelegate.swift`.
 
-Helper `copyModelToFile()` sudah tersedia untuk keperluan ini tapi belum dipanggil dari mana pun. Kalau kamu dapat `Exception: ONNX model not found`, ini penyebabnya. Dua jalan keluar: ekstrak asset ke `getApplicationCacheDirectory()` saat pertama kali app dijalankan lalu oper path absolutnya, atau seragamkan semua loader supaya memakai `rootBundle`.
+---
 
-`unicode_indexer.json` dan voice style tetap perlu terdaftar di `pubspec.yaml` karena keduanya dibaca dari bundle:
+## Assets download service
 
-```yaml
-flutter:
-  assets:
-    - assets/onnx/
-    - assets/voice_styles/
+`lib/tts_assets/` berisi lima file:
+
+| File | Isi |
+|---|---|
+| `tts_asset_registry.dart` | Enum `TtsAsset` + `TtsAssetDir`. Sumber tunggal daftar file. |
+| `assets_download_progress.dart` | `AssetsDownloadProgress` — snapshot state immutable yang di-stream ke UI. |
+| `assets_download_service.dart` | Downloader. Tidak punya dependency ke Flutter widget maupun plugin notifikasi. |
+| `assets_download_notifier.dart` | Local notification. Opsional, bisa dihapus tanpa menyentuh service. |
+| `assets_progress_card.dart` | Widget progress untuk TTSPage. |
+
+### Pemakaian
+
+```dart
+final assets = TtsAssetsDownloadService.instance;
+
+// main() — jangan di-await, biar UI langsung tampil
+unawaited(assets.ensureReady());
+
+// setelah selesai
+final onnxDir = await assets.onnxDirPath;
+final tts = await loadTextToSpeech(onnxDir);
 ```
+
+`ensureReady()` idempotent — panggilan kedua saat masih jalan menempel ke future yang sama. Aman dipanggil dari `main()`, `initState`, tombol retry, dan `AppLifecycleState.resumed` sekaligus.
+
+### Perilaku yang perlu diketahui
+
+**Resume, bukan restart.** Byte ditulis ke `<nama>.part` dengan `FileMode.append` dan header `Range: bytes=N-`. Socket putus di byte ke-80 juta, retry berikutnya lanjut dari 80 juta. Membuang progress saat gagal itu fatal untuk file 200 MB di jaringan seluler.
+
+**Rename atomik.** `.part` baru di-rename ke nama final setelah ukurannya cocok dengan `Content-Length`. ONNX Runtime tidak akan pernah membuka file setengah jadi.
+
+**Server bisa mengabaikan `Range`.** Kalau GCS balas `200` padahal diminta `206`, counter di-reset ke 0 dan file ditulis ulang dari awal. Tanpa penanganan ini progress bar tembus 100% dan file korup karena byte ditumpuk.
+
+**`Accept-Encoding: identity`.** Kalau response di-gzip, `Content-Length` adalah ukuran terkompresi sedangkan yang mendarat di disk ukuran asli — verifikasi ukuran dan resume dua-duanya jadi salah. File `.onnx` sudah padat, gzip tidak menghemat apa pun.
+
+**Emit di-throttle 200 ms.** Emit per-chunk berarti ribuan `setState` per detik. Di device kelas Helio G85 itu menaikkan GC pressure sampai download-nya sendiri melambat. Throttling di sini menaikkan throughput, bukan menahannya.
+
+**Ukuran dari server, bukan hardcode.** `HEAD` sekali di awal, hasilnya di-cache ke `manifest.json`. Peluncuran kedua tidak perlu `HEAD` lagi. `estimatedBytes` di enum hanya bobot sementara sebelum `HEAD` selesai — kalau meleset, progress bar tetap benar setelahnya.
+
+**Core dulu.** Enam file di `onnx/` plus `M1.json` ditandai `core: true` dan di-download lebih dulu. Begitu core lengkap, `coreReady` jadi true dan engine boleh boot sementara sembilan voice style sisanya menyusul.
+
+**Paralel 3, retry 4× dengan backoff** 1s → 2s → 4s. Progress `.part` dipertahankan antar attempt.
+
+### Konfigurasi
+
+```dart
+TtsAssetsDownloadService(
+  maxConcurrent: 3,
+  maxRetries: 4,
+  emitInterval: Duration(milliseconds: 200),
+  requestTimeout: Duration(seconds: 30),
+)
+```
+
+Untuk unit test, konstruktornya menerima `http.Client` sendiri.
+
+---
+
+## Setup Android
+
+`android/app/src/main/AndroidManifest.xml`:
+
+```xml
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission
+        android:name="android.permission.POST_NOTIFICATIONS"
+        tools:targetApi="33"/>
+```
+
+`xmlns:tools` wajib ada, kalau tidak manifest merger gagal dengan `MergeFailureException: Error parsing`. `tools:targetApi` murni untuk meredam lint — permission tetap ikut merged manifest, dan Android di bawah API 33 memang mengabaikannya.
+
+`android/app/build.gradle.kts` — project ini pakai **Kotlin DSL**, jadi assignment pakai `=` dan dependency pakai kurung:
+
+```kotlin
+android {
+    compileOptions {
+        isCoreLibraryDesugaringEnabled = true
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+// level teratas, sejajar dengan android { } — bukan di dalamnya
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+}
+```
+
+Desugaring dibutuhkan `flutter_local_notifications` 10+.
 
 ---
 
@@ -126,10 +200,16 @@ flutter:
 
 ```
 lib/
-├── main.dart            # entry point, MaterialApp
+├── main.dart            # entry point, bootstrap download service
 ├── supertonic.dart      # TTSPage — UI
 ├── helper.dart          # engine TTS, preprocessing, WAV writer
-└── amount_masker.dart   # masking nominal untuk payload clipboard
+├── amout_masker.dart    # masking nominal untuk payload clipboard
+└── tts_assets/
+    ├── tts_asset_registry.dart
+    ├── assets_download_progress.dart
+    ├── assets_download_service.dart
+    ├── assets_download_notifier.dart
+    └── assets_progress_card.dart
 ```
 
 `helper.dart` memuat inti engine-nya:
@@ -140,15 +220,29 @@ lib/
 - `preprocessText` — normalisasi teks + validasi bahasa
 - `writeWavFile` — penulis header RIFF/WAVE manual, PCM 16-bit mono
 
+### Resolusi path di loader
+
+Keempat loader sekarang seragam lewat `_readAssetText()` dan `_materializeModel()`:
+
+| Bentuk path | Sumber |
+|---|---|
+| diawali `assets/` | `rootBundle` (diekstrak ke cache untuk `.onnx`) |
+| selain itu | filesystem, dipakai apa adanya |
+
+Artinya path hasil download langsung bisa dioper ke `loadTextToSpeech()`. Untuk path filesystem, model **tidak** di-copy ulang ke cache — sebelumnya `copyModelToFile` menulis ulang 200 MB setiap boot.
+
+Kalau suatu saat model kecil (int8 quantized) mau di-ship di dalam bundle, tinggal aktifkan kembali `assets:` di `pubspec.yaml` dan oper `'assets/onnx'` — dua-duanya tetap didukung.
+
 ---
 
 ## Pemakaian
 
-1. Buka app, tunggu status berubah jadi **Siap** (pemuatan model perlu beberapa detik).
-2. Isi **Teks Indonesia** dan **Teks Inggris**. Dropdown *Teks instan* menyediakan beberapa kalimat siap pakai untuk kolom Indonesia.
-3. Pilih **Voice style**. Setiap preset otomatis menyetel speed dan pitch bawaannya — speed masih bisa digeser manual setelahnya.
-4. Tekan **Putar suara Indonesia** atau **Putar suara Inggris** untuk mendengarkan hasilnya.
-5. Tekan **Salin data untuk tim admin QRIS**.
+1. Buka app. Kalau ini peluncuran pertama, kartu progress di atas halaman menampilkan proses download model. Aplikasi tetap bisa dipakai — teks boleh diisi sambil menunggu, hanya tombol putar yang nonaktif.
+2. Tunggu status berubah jadi **Siap**.
+3. Isi **Teks Indonesia** dan **Teks Inggris**. Dropdown *Teks instan* menyediakan beberapa kalimat siap pakai untuk kolom Indonesia.
+4. Pilih **Voice style**. Setiap preset otomatis menyetel speed dan pitch bawaannya — speed masih bisa digeser manual setelahnya.
+5. Tekan **Putar suara Indonesia** atau **Putar suara Inggris**.
+6. Tekan **Salin data untuk tim admin QRIS**.
 
 ### Bahasa
 
@@ -180,6 +274,8 @@ Dikunci di **5** (`TTSPage.kDenoisingSteps`). Nilai lebih tinggi sedikit menaikk
 | Energetic | F2 | 1.30 | 1.20 |
 
 **Speed** diterapkan di tingkat model (membagi durasi prediksi). **Pitch** diterapkan di tingkat pemutaran lewat `AudioPlayer.setPitch()` — jadi pitch memengaruhi apa yang kamu dengar, tapi **tidak** ikut tersimpan ke dalam file WAV.
+
+Preset yang style file-nya belum selesai di-download akan ditolak dengan pesan, bukan crash. M1 ditandai core, jadi preset Normal selalu tersedia paling awal.
 
 ---
 
@@ -217,20 +313,34 @@ Panel *Yang akan disalin* di atas tombol salin menampilkan hasil masking secara 
 
 | Gejala | Penyebab |
 |---|---|
-| `Exception: ONNX model not found` | Lihat bagian ⚠️ path di atas — model dicari di filesystem, bukan bundle |
-| `ArgumentError: Invalid language` | Kode bahasa di luar `availableLangs`; `TtsLang` seharusnya sudah mencegah ini |
-| `Model tidak menghasilkan audio` | Teks habis dibuang saat preprocessing (isinya hanya simbol atau emoji) |
-| Voice style gagal dimuat | File `assets/voice_styles/{F1…M5}.json` belum terdaftar di `pubspec.yaml` |
-| Generate terasa lambat | Naikkan dulu curiganya ke jumlah denoising step dan panjang teks, bukan ke ukuran model |
+| Kartu progress mentok di satu angka | Koneksi putus. Service retry 4× dengan backoff sebelum menyerah; setelah itu tombol **Coba lagi** muncul dan melanjutkan dari byte terakhir, bukan dari nol. |
+| `Asset TTS tidak ditemukan` | `loadTextToSpeech()` dipanggil sebelum `ensureReady()` selesai. Cek gating di `_watchAssets()`. |
+| Download selalu mulai dari 0 | Server tidak menghormati header `Range`. Cek apakah ada proxy/CDN di depan bucket. |
+| `MergeFailureException: Error parsing AndroidManifest.xml` | `xmlns:tools` belum dideklarasikan di tag `<manifest>` padahal `tools:targetApi` dipakai. |
+| `Unresolved reference: coreLibraryDesugaringEnabled` | Syntax Groovy dipakai di `build.gradle.kts`. Lihat bagian Setup Android. |
+| Notifikasi progress tidak muncul di Android 13+ | `POST_NOTIFICATIONS` ditolak user. Download tetap jalan; progress tetap terlihat di halaman TTS. |
+| Notifikasi progress tidak muncul di iOS | Wajar. UNNotification tidak punya progress bar — iOS hanya menampilkan notifikasi mulai dan selesai. |
+| `ArgumentError: Invalid language` | Kode bahasa di luar `availableLangs`; `TtsLang` seharusnya sudah mencegah ini. |
+| `Model tidak menghasilkan audio` | Teks habis dibuang saat preprocessing (isinya hanya simbol atau emoji). |
+| Voice style gagal dimuat | File style-nya belum selesai di-download. Tunggu progress mencapai 100%. |
+| Generate terasa lambat | Naikkan dulu curiganya ke jumlah denoising step dan panjang teks, bukan ke ukuran model. |
+
+Untuk memaksa unduh ulang dari nol: `TtsAssetsDownloadService.instance.clear()`.
 
 ---
 
 ## Roadmap
 
-- [ ] Ekstraksi asset otomatis saat pertama dijalankan, supaya loader path konsisten
+- [x] Ekstraksi asset otomatis saat pertama dijalankan, supaya loader path konsisten
+- [ ] **Quantization fp32 → int8.** Pengungkit terbesar yang belum disentuh — memotong ukuran model sekitar 4×, dari ~200 MB ke ~50 MB. Seluruh kompleksitas download di atas jadi masalah yang jauh lebih kecil kalau ini duluan dikerjakan.
+- [ ] **Verifikasi checksum.** Sekarang hanya membandingkan ukuran byte. File yang ukurannya pas tapi isinya korup tetap lolos. Butuh `sha256` per file tersedia di bucket, lalu tambah field di `TtsAsset`.
+- [ ] **Versioning model.** Belum ada mekanisme invalidasi kalau model baru di-upload dengan nama file sama. Opsi paling ringan: satu `version.json` di root bucket, mismatch → `clear()` + unduh ulang.
+- [ ] **Bucket region `asia-southeast2`.** Mengurangi latensi unduh untuk user Indonesia.
+- [ ] `NSURLIsExcludedFromBackupKey` di iOS supaya model tidak ikut backup iCloud
 - [ ] Export MP3 dan share sheet (butuh encoder native — `flutter_lame` kandidat paling ringan; catatan lisensinya LGPL-3.0)
 - [ ] Daftar teks instan untuk bahasa Inggris
 - [ ] Unit test untuk `AmountMasker`
+- [ ] Unit test untuk `TtsAssetsDownloadService` (resume, `Range` diabaikan, `.part` korup)
 
 ---
 
