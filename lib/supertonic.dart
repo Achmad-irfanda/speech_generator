@@ -345,9 +345,9 @@ class _TTSPageState extends State<TTSPage> {
         '\n'
         'speed: ${_speed.toStringAsFixed(2)}\n'
         '\n'
-        'voice styles: $styleLabel'
+        'voice styles: $styleLabel\n'
         '\n'
-        'pitch $_pitch';
+        'pitch: $_pitch';
   }
 
   Future<void> _copyToClipboard() async {
