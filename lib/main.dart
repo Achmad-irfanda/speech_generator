@@ -30,11 +30,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Speech Generator',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: .fromSeed(
-          seedColor: const Color.fromARGB(217, 210, 170, 78),
-        ),
-      ),
+      theme: ThemeData(colorScheme: .fromSeed(seedColor: Color(0xffB4862B))),
       home: TTSPage(),
     );
   }
