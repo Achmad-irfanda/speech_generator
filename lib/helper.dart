@@ -800,16 +800,11 @@ Future<String> _readAssetText(String path) async {
   return file.readAsString();
 }
 
-/// Kembalikan path filesystem yang siap dioper ke ONNX Runtime.
-/// Untuk bundle path, file diekstrak dulu ke cache (perilaku lama).
-/// Untuk path filesystem, dipakai apa adanya — tanpa copy percuma.
-Future<String> _materializeModel(String path) async {
-  if (_isBundlePath(path)) return copyModelToFile(path);
-
-  if (!File(path).existsSync()) {
-    throw FileSystemException('ONNX model not found', path);
-  }
-  return path;
+//
+Future<OrtSession> _openModel(OnnxRuntime ort, String path) {
+  return _isBundlePath(path)
+      ? ort.createSessionFromAsset(path) // plugin yang urus ekstraksi
+      : ort.createSession(path); // hasil download, pakai langsung
 }
 
 Future<Map<String, OrtSession>> _loadOnnxAll(String dir) async {
@@ -823,9 +818,12 @@ Future<Map<String, OrtSession>> _loadOnnxAll(String dir) async {
 
   final sessions = await Future.wait(
     models.map((name) async {
-      final path = await _materializeModel('$dir/$name.onnx');
+      final path = '$dir/$name.onnx';
+      if (!_isBundlePath(path) && !File(path).existsSync()) {
+        throw FileSystemException('ONNX model not found', path);
+      }
       logger.d('Loading $name.onnx');
-      return ort.createSessionFromAsset(path);
+      return _openModel(ort, path);
     }),
   );
 
