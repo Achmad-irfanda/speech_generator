@@ -3,7 +3,6 @@ import 'assets_download_progress.dart';
 import 'assets_download_service.dart';
 
 /// Kartu progress penyiapan model TTS.
-///
 /// Menghilang sendiri kalau semua aset sudah lengkap ([AssetsDownloadStatus.ready]),
 /// jadi aman ditaruh permanen di atas konten TTSPage.
 class AssetsProgressCard extends StatelessWidget {
