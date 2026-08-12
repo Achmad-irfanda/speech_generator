@@ -16,8 +16,7 @@ import 'package:speech_generator/tts_assets_registry.dart';
 /// Bahasa yang didukung halaman ini.
 /// `code` dipakai saat memanggil model ONNX, `label` untuk tampilan.
 enum TtsLang {
-  id('id', 'Indonesia'),
-  en('en', 'Inggris');
+  id('id', 'Indonesia');
 
   const TtsLang(this.code, this.label);
 
@@ -41,7 +40,6 @@ class _TTSPageState extends State<TTSPage> {
   final TextEditingController _textIdController = TextEditingController(
     text: listText.isNotEmpty ? listText.first : '',
   );
-  final TextEditingController _textEnController = TextEditingController();
 
   final TtsAssetsDownloadService _assets = TtsAssetsDownloadService.instance;
 
@@ -84,7 +82,6 @@ class _TTSPageState extends State<TTSPage> {
   void dispose() {
     _assetsSub?.cancel();
     _textIdController.dispose();
-    _textEnController.dispose();
     _audioPlayer.dispose();
     super.dispose();
   }
@@ -219,7 +216,7 @@ class _TTSPageState extends State<TTSPage> {
   }
 
   Future<void> _generateSpeech(TtsLang lang) async {
-    final text = _controllerFor(lang).text.trim();
+    final text = _textIdController.text.trim();
 
     final assetState = _assets.value;
     if (!assetState.coreReady && !assetState.isReady) {
@@ -319,9 +316,6 @@ class _TTSPageState extends State<TTSPage> {
     });
   }
 
-  TextEditingController _controllerFor(TtsLang lang) =>
-      lang == TtsLang.id ? _textIdController : _textEnController;
-
   // ---------------------------------------------------------------------------
   // Clipboard
   // ---------------------------------------------------------------------------
@@ -332,13 +326,11 @@ class _TTSPageState extends State<TTSPage> {
 
     // Nominal di-mask hanya di payload. Teks yang dikirim ke model TTS
     // tetap memakai angka aslinya.
-    final maskedEn = AmountMasker.mask(_textEnController.text);
     final maskedId = AmountMasker.mask(_textIdController.text);
 
     return 'note: tolong kirimkan copy data ini ke tim admin qris ya untuk di '
         'tambahkan melalui dashboard internal.\n'
         '\n'
-        'teks inggris: "$maskedEn"\n'
         'teks indonesia: "$maskedId"\n'
         '\n'
         'denoising steps: $kDenoisingSteps\n'
@@ -351,7 +343,7 @@ class _TTSPageState extends State<TTSPage> {
   }
 
   Future<void> _copyToClipboard() async {
-    if (_textEnController.text.trim().isEmpty ||
+    if (_textIdController.text.trim().isEmpty ||
         _textIdController.text.trim().isEmpty) {
       _notify('Isi dulu kedua teks sebelum menyalin.');
       return;
@@ -460,20 +452,6 @@ class _TTSPageState extends State<TTSPage> {
             alignLabelWithHint: true,
           ),
         ),
-        const SizedBox(height: 16),
-        TextField(
-          controller: _textEnController,
-          maxLines: 4,
-          enabled: !_isBusy,
-          textInputAction: TextInputAction.newline,
-          onChanged: (_) => setState(() {}),
-          decoration: const InputDecoration(
-            labelText: 'Teks Inggris',
-            hintText: 'Transaction successful, thank you.',
-            border: OutlineInputBorder(),
-            alignLabelWithHint: true,
-          ),
-        ),
       ],
     );
   }
@@ -552,8 +530,6 @@ class _TTSPageState extends State<TTSPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _buildGenerateButton(TtsLang.id),
-        const SizedBox(height: 12),
-        _buildGenerateButton(TtsLang.en),
         const SizedBox(height: 24),
         _buildMaskPreview(),
         OutlinedButton.icon(
@@ -572,9 +548,8 @@ class _TTSPageState extends State<TTSPage> {
   /// sebelum data dikirim ke tim admin.
   Widget _buildMaskPreview() {
     final maskedId = AmountMasker.mask(_textIdController.text);
-    final maskedEn = AmountMasker.mask(_textEnController.text);
 
-    if (maskedId.isEmpty && maskedEn.isEmpty) return const SizedBox.shrink();
+    if (maskedId.isEmpty) return const SizedBox.shrink();
 
     final theme = Theme.of(context);
 
@@ -593,10 +568,6 @@ class _TTSPageState extends State<TTSPage> {
             const SizedBox(height: 8),
             if (maskedId.isNotEmpty)
               Text('ID: $maskedId', style: theme.textTheme.bodySmall),
-            if (maskedEn.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text('EN: $maskedEn', style: theme.textTheme.bodySmall),
-            ],
           ],
         ),
       ),
